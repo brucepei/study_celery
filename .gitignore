@@ -1,0 +1,10 @@
+.svn
+*.sqlite3 
+*.pyc 
+__pycache__ 
+_eric6project
+*.e4p
+*.prj
+*.log
+venv
+*.komodoproject
