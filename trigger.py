@@ -1,10 +1,14 @@
-from tbd.tasks import add, upgrade
+from tbd.tasks import upgrade, add, app
 from celery.result import AsyncResult
 import time
+import logging
+import logging.config
+
+logging.config.fileConfig('logging.ini')
+logger = logging.getLogger(__name__)
 
 def upgrade_workers(target=None):
-    if target is None:
-        result = upgrade.s()
+    upgrade.delay()
         
 def get_result():
     result = add.delay(3, 10)
@@ -39,7 +43,10 @@ def query_result():
         time.sleep(1)
 
 if __name__ == '__main__':
-    query_result()
+    app.control.broadcast('upgrade')
+    # add.run(3,4)
+    # upgrade_workers()
+    # query_result()
     # get_result()
     # t1 = time.time()
     # result = upgrade.delay()

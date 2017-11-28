@@ -2,6 +2,7 @@ from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
 from kombu import Queue
+import re
 import time
 import sys
 import json
@@ -13,6 +14,9 @@ from celery import signals
 from celery.worker.control import control_command
 from billiard import current_process
 from requests import Session
+from celery.utils.log import get_logger
+
+logger = get_logger(__name__)
 
 os.environ.setdefault('FORKED_BY_MULTIPROCESSING', '1')
 
@@ -38,14 +42,6 @@ app.conf.update(
 def capture_worker_name(sender, instance, **kwargs):
     os.environ["CELERY_WORKER_NAME"] = sender
 
-@control_command()
-def reload_worker(state, msg='Got shutdown from remote', **kwargs):
-    print(msg)
-    controller = state.app.WorkController(state.app)
-    print(controller)
-    # print(controller.state)
-    controller.terminate()
-
 @task_prerun.connect
 def init_task(sender=None, task=None, task_id=None, **kwargs):
     print('worker {0!r} task {1!s} is running with request: {2}'.format(task.app.Worker, task_id, task.request))
@@ -59,6 +55,13 @@ def done_task(sender=None, task=None, task_id=None, retval=None, **kwargs):
             'task_result': json.dumps(retval),
         })
 
+@app.task
+def add(a, b):
+    for i in range(3, 0, -1):
+        print("remain {}".format(i))
+        time.sleep(1)
+    return a+b;
+        
 @app.task(bind=True)
 def query_issue_frequency(self, issue_id):
     for i in range(2):
@@ -81,9 +84,44 @@ def query_issue_frequency(self, issue_id):
     }
     return result
 
-@app.task(bind=True, ignore_result=False)
-def upgrade(self):
-    self.app.control.broadcast('shutdown', destination=[os.environ["CELERY_WORKER_NAME"]])
-    proc = Popen("svn update", stdout=PIPE, stderr=PIPE)
-    output, error = proc.communicate()
-    return {'stdout': bytes.decode(output), 'stderr': bytes.decode(error), 'code': proc.returncode }
+def run_cmd(command):
+    logger.debug("start command:{}".format(command))
+    proc = Popen(command, stdout=PIPE, stderr=PIPE)
+    out, err = proc.communicate()
+    out = bytes.decode(out, encoding='utf-8', errors='ignore')
+    err = bytes.decode(err, encoding='utf-8', errors='ignore')
+    logger.debug("done command:{}, output: {}, error: {}".format(command, out, err))
+    return (out, err)
+
+@control_command()
+def upgrade(state, **kwargs):
+    svn_version_regex = re.compile(r'Revision:?\s+(\d+)', re.I)
+    cur_version = None
+    latest_version = None
+    result = {'error': 0, 'msg': None}
+    out, err = run_cmd("svn info")
+    if out:
+        m = svn_version_regex.search(out)
+        if m:
+            cur_version = m.group(1)
+            logger.info("current svn revision: {}".format(cur_version))
+        else:
+            logger.error("Failed to get version, give up upgrade: output: {}, error: {}", out, err)
+            result['error'] = 1
+    out, err = run_cmd("svn update")
+    if out:
+        m = svn_version_regex.search(out)
+        if m:
+            latest_version = m.group(1)
+            logger.info("Update to latest svn revision: {}".format(latest_version))
+        else:
+            logger.error("Failed to update svn, give up upgrade: output: {}, error: {}", out, err)
+            result['error'] = 1
+    if cur_version and latest_version and cur_version != latest_version:
+        logger.info("Upgrade to from {} to {}, so restart current worker!".format(cur_version, latest_version))
+        state.app.control.broadcast('shutdown', destination=[os.environ["CELERY_WORKER_NAME"]])
+        result['msg'] = "upgraded from {} to {}, restart...".format(cur_version, latest_version)
+    else:
+        result['msg'] = "no upgrade: {}=={}".format(cur_version, latest_version)
+    logger.debug("result={!r}".format(result))
+    return result
