@@ -15,6 +15,7 @@ from celery.worker.control import control_command
 from billiard import current_process
 from requests import Session
 from celery.utils.log import get_logger
+from celery.exceptions import WorkerShutdown
 
 logger = get_logger(__name__)
 
@@ -119,9 +120,10 @@ def upgrade(state, **kwargs):
             result['error'] = 1
     if cur_version and latest_version and cur_version != latest_version:
         logger.info("Upgrade to from {} to {}, so restart current worker!".format(cur_version, latest_version))
-        state.app.control.broadcast('shutdown', destination=[os.environ["CELERY_WORKER_NAME"]])
+        # state.app.control.broadcast('shutdown', destination=[os.environ["CELERY_WORKER_NAME"]])
         result['msg'] = "upgraded from {} to {}, restart...".format(cur_version, latest_version)
+        raise WorkerShutdown(result['msg'])
     else:
         result['msg'] = "no upgrade: {}=={}".format(cur_version, latest_version)
-    logger.debug("result={!r}".format(result))
+    logger.info("result={!r}".format(result))
     return result
