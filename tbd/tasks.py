@@ -48,12 +48,15 @@ def init_task(sender=None, task=None, task_id=None, **kwargs):
     print('worker {0!r} task {1!s} is running with request: {2}'.format(task.app.Worker, task_id, task.request))
 
 @task_postrun.connect
-def done_task(sender=None, task=None, task_id=None, retval=None, **kwargs):
-    print('sender {0!r} task {1!s} is done with result: {2}'.format(sender.name, task_id, retval))
+def done_task(sender=None, task=None, retval=None, args=None, **kwargs):
+    print('sender {0!r} task({1!r}, {2!r}) is done with result: {3}'.format(sender.name, args, kwargs, retval))
     if sender.name == "tbd.tasks.query_issue_frequency":
-        resp = Session().post('http://127.0.0.1:8001/auto/task_result', {
-            'task_id': task_id,
-            'task_result': json.dumps(retval),
+        issue_id, result_url = args
+        issue_result, assoc_issues = retval
+        resp = Session().post(result_url, {
+            'issue_id': issue_id,
+            'issue_result': json.dumps(issue_result),
+            'assoc_issues': json.dumps(assoc_issues),
         })
 
 @app.task
@@ -63,8 +66,8 @@ def add(a, b):
         time.sleep(1)
     return a+b;
         
-@app.task(bind=True)
-def query_issue_frequency(self, issue_id):
+@app.task
+def query_issue_frequency(issue_id, result_url):
     for i in range(2):
         print("study do job for {}".format(i))
         time.sleep(1)
@@ -83,8 +86,17 @@ def query_issue_frequency(self, issue_id):
             },
         }
     }
-    return result
+    return (result, get_associate_issue_set(result))
 
+def get_associate_issue_set(issue_result):
+    jira_set = set()
+    if 'builds' in issue_result:
+        for build in issue_result['builds']:
+            for dut in issue_result['builds'][build]:
+                for jira in issue_result['builds'][build][dut]:
+                    jira_set.add(jira)
+    return list(jira_set)
+    
 def run_cmd(command):
     logger.debug("start command:{}".format(command))
     proc = Popen(command, stdout=PIPE, stderr=PIPE)
